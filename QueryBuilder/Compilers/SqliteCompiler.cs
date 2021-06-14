@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using SqlKata;
 using SqlKata.Compilers;
 
@@ -65,6 +66,60 @@ namespace SqlKata.Compilers
             }
 
             return sql;
+        }
+
+        protected override string CompileColumns(SqlResult ctx)
+        {
+            int numApproxColumns = 0;
+
+            // This is not made available as a generic implementation because
+            // the SelectRaw() below (with the CAST-RANK-OVER construction) is
+            // not tested to work on databases other than SQLite.
+            ctx.Query.Clauses = ctx.Query.Clauses.Select(clause =>
+            {
+                if (clause is SqlKata.AggregatePercentileApproxColumn column)
+                {
+                    ++numApproxColumns;
+                    var percentile = $"sqlkata_generated__percentile{ (numApproxColumns > 1 ? numApproxColumns.ToString() : "")}";
+                    var q = new Query()
+                        .With($"{percentile}_value", x =>
+                            {
+                                x
+                                .SelectAs((column.Column, "value"))
+                                .SelectRaw($@"CAST(RANK() OVER(ORDER BY ""{column.Column}"") - 1 AS FLOAT) / (COUNT(*) OVER() - 1) AS ""percentile""")
+                                ;
+                                x.Clauses.AddRange(ctx.Query.Clauses.Where(c => c is AbstractFrom));
+                                return x;
+                            }
+                        )
+                        .With($"{percentile}", x => x
+                            .SelectAs(("value", "result"))
+                            .From($"{percentile}_value")
+                            .Where("percentile", ">=", column.Percentile)
+                            .Limit(1)
+                        )
+                        .Join($"{percentile}", j => j)
+                        ;
+
+                    if (numApproxColumns == 1 && !ctx.Query.HasComponent("group"))
+                    {
+                        q.GroupBy($"{percentile}.result");
+                    }
+
+                    q.Clauses.Add(new Column
+                    {
+                        Component = column.Component,
+                        Engine = column.Engine,
+                        Name = $"{percentile}.result",
+                        Alias = column.Alias ?? "percentileapprox",
+                    });
+
+                    return q.Clauses;
+                }
+                return new List<AbstractClause> { clause };
+            }).SelectMany(x => x).ToList();
+
+            return base.CompileColumns(ctx);
         }
     }
 }
