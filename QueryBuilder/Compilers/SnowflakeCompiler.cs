@@ -42,6 +42,38 @@ namespace SqlKata.Compilers
             }
         }
 
+        private class SnowflakeAggregatePercentileApproxColumn : SqlKata.AggregatePercentileApproxColumn
+        {
+            public override string Compile(SqlResult ctx)
+            {
+                return $"{Type.ToUpperInvariant()}({new Column { Name = Column }.Compile(ctx)}, {Percentile}) {ctx.Compiler.ColumnAsKeyword}{ctx.Compiler.WrapValue(Alias ?? Type)}";
+            }
+        }
+
+        protected override string CompileColumns(SqlResult ctx)
+        {
+            /**
+             * Snowflake supports the ANY_VALUE function natively
+             */
+            ctx.Query.Clauses = ctx.Query.Clauses.Select(clause =>
+            {
+                if (clause is SqlKata.AggregatePercentileApproxColumn column)
+                {
+                    return new SnowflakeAggregatePercentileApproxColumn
+                    {
+                        Component = column.Component,
+                        Type = "approx_percentile",
+                        Alias = column.Alias ?? column.Type,
+                        Column = column.Column,
+                        Percentile = column.Percentile,
+                    };
+                }
+                return clause;
+            }).ToList();
+
+            return base.CompileColumns(ctx);
+        }
+
         private static SqlResult PrepareResultForSnowflake(SqlResult ctx)
         {
             ctx.NamedBindings = ctx.Bindings

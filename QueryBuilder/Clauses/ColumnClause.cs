@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 
 namespace SqlKata
 {
@@ -138,6 +139,29 @@ namespace SqlKata
         public override string Compile(SqlResult ctx)
         {
             return $"{Type.ToUpperInvariant()}({(IsDistinct ? ctx.Compiler.DistinctKeyword : "")}{new Column { Name = Column }.Compile(ctx)}) {ctx.Compiler.ColumnAsKeyword}{ctx.Compiler.WrapValue(Alias ?? Type)}";
+        }
+    }
+
+    public class AggregatePercentileApproxColumn : AggregateColumn
+    {
+        public double Percentile { get; set; }
+
+        public AggregatePercentileApproxColumn() { }
+
+        public AggregatePercentileApproxColumn(AggregatePercentileApproxColumn other)
+            : base(other)
+        {
+            Percentile = other.Percentile;
+        }
+
+        public override AbstractClause Clone()
+        {
+            return new AggregatePercentileApproxColumn(this);
+        }
+
+        public override string Compile(SqlResult ctx)
+        {
+            throw new NotSupportedException("Percentile is not supported for this compiler.");
         }
     }
 

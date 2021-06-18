@@ -1,12 +1,31 @@
 using SqlKata.Compilers;
 using SqlKata.Tests.Infrastructure;
 using System;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace SqlKata.Tests
 {
     public class AggregateTests : TestSupport
     {
+        private string StripWhitespace(string value)
+        {
+            return
+            Regex.Replace(
+                Regex.Replace(
+                    Regex.Replace(
+                        value,
+                        @"\s+",
+                        " "
+                    ),
+                    @"^\s+|\s+$",
+                    ""
+                ),
+                "((\\() | ?(\\)) ?)",
+                "$2$3"
+            );
+        }
+
         [Fact]
         public void SelectAggregateEmpty()
         {
@@ -439,6 +458,124 @@ namespace SqlKata.Tests
             var c = Compile(query);
 
             Assert.Equal("SELECT MIN([LatencyMs]) AS [Alias] FROM [A]", c[EngineCodes.SqlServer]);
+        }
+
+        [Fact]
+        public void SelectPercentileApprox()
+        {
+            var query = new Query()
+                .SelectPercentileApprox("c1", 0.1)
+                .From("table")
+                ;
+
+            // Percentile is not generally supported
+            Assert.Throws<NotSupportedException>(() => Compile(query));
+
+            Assert.Equal(StripWhitespace(@"
+                WITH
+                    ""sqlkata_generated__percentile_value"" AS (
+                        SELECT
+                            ""c1"" AS ""value"",
+                            CAST(RANK() OVER(ORDER BY ""c1"") - 1 AS FLOAT) / (COUNT(*) OVER() - 1) AS ""percentile""
+                        FROM ""table""
+                    ),
+                    ""sqlkata_generated__percentile"" AS (
+                        SELECT ""value"" AS ""result""
+                        FROM ""sqlkata_generated__percentile_value""
+                        WHERE ""percentile"" >= 0.1
+                        LIMIT 1
+                    )
+                SELECT ""sqlkata_generated__percentile"".""result"" AS ""percentileapprox""
+                FROM ""table""
+                    INNER JOIN ""sqlkata_generated__percentile""
+                GROUP BY ""sqlkata_generated__percentile"".""result""
+                "), StripWhitespace(Compilers.CompileFor(EngineCodes.Sqlite, query.Clone()).ToString()));
+            Assert.Equal("SELECT APPROX_PERCENTILE(\"c1\", 0.1) AS \"percentileapprox\" FROM \"table\"", Compilers.CompileFor(EngineCodes.Snowflake, query.Clone()).ToString());
+        }
+
+        [Fact]
+        public void SelectPercentileApproxComplex()
+        {
+            var query = new Query()
+                .SelectPercentileApprox("table.c1", 0.1)
+                .From("table")
+                ;
+        }
+
+        [Fact]
+        public void SelectPercentileApproxMultiple()
+        {
+            var query = new Query()
+                .SelectPercentileApprox("c1", 0.1)
+                .SelectPercentileApprox("c1", 0.9) // expressly using the same column
+                .From("table")
+                ;
+
+            Assert.Equal(StripWhitespace(@"
+                WITH
+                    ""sqlkata_generated__percentile_value"" AS (
+                        SELECT
+                            ""c1"" AS ""value"",
+                            CAST(RANK() OVER(ORDER BY ""c1"") - 1 AS FLOAT) / (COUNT(*) OVER() - 1) AS ""percentile""
+                        FROM ""table""
+                    ),
+                    ""sqlkata_generated__percentile"" AS (
+                        SELECT ""value"" AS ""result""
+                        FROM ""sqlkata_generated__percentile_value""
+                        WHERE ""percentile"" >= 0.1
+                        LIMIT 1
+                    ),
+                    ""sqlkata_generated__percentile2_value"" AS (
+                        SELECT
+                            ""c1"" AS ""value"",
+                            CAST(RANK() OVER(ORDER BY ""c1"") - 1 AS FLOAT) / (COUNT(*) OVER() - 1) AS ""percentile""
+                        FROM ""table""
+                    ),
+                    ""sqlkata_generated__percentile2"" AS (
+                        SELECT ""value"" AS ""result""
+                        FROM ""sqlkata_generated__percentile2_value""
+                        WHERE ""percentile"" >= 0.9
+                        LIMIT 1
+                    )
+                SELECT ""sqlkata_generated__percentile"".""result"" AS ""percentileapprox"", ""sqlkata_generated__percentile2"".""result"" AS ""percentileapprox""
+                FROM ""table""
+                    INNER JOIN ""sqlkata_generated__percentile""
+                    INNER JOIN ""sqlkata_generated__percentile2""
+                GROUP BY ""sqlkata_generated__percentile"".""result""
+                "), StripWhitespace(Compilers.CompileFor(EngineCodes.Sqlite, query.Clone()).ToString()));
+            Assert.Equal("SELECT APPROX_PERCENTILE(\"c1\", 0.1) AS \"percentileapprox\", APPROX_PERCENTILE(\"c1\", 0.9) AS \"percentileapprox\" FROM \"table\"", Compilers.CompileFor(EngineCodes.Snowflake, query.Clone()).ToString());
+        }
+
+            [Fact]
+        public void SelectPercentileApproxAlias()
+        {
+            var query = new Query()
+                .SelectPercentileApprox("c1", 0.1, "Alias")
+                .From("table")
+                ;
+
+            Assert.Equal(StripWhitespace(@"
+                WITH
+                    ""sqlkata_generated__percentile_value"" AS (
+                        SELECT
+                            ""c1"" AS ""value"",
+                            CAST(RANK() OVER(ORDER BY ""c1"") - 1 AS FLOAT) / (COUNT(*) OVER() - 1) AS ""percentile""
+                        FROM ""table""
+                    ),
+                    ""sqlkata_generated__percentile"" AS (
+                        SELECT ""value"" AS ""result""
+                        FROM ""sqlkata_generated__percentile_value""
+                        WHERE ""percentile"" >= 0.1
+                        LIMIT 1
+                    )
+                SELECT ""sqlkata_generated__percentile"".""result"" AS ""Alias""
+                FROM ""table""
+                    INNER JOIN ""sqlkata_generated__percentile""
+                GROUP BY ""sqlkata_generated__percentile"".""result""
+                "),
+                StripWhitespace(Compilers.CompileFor(EngineCodes.Sqlite, query.Clone()).ToString())
+            );
+            Assert.Equal(@"SELECT APPROX_PERCENTILE(""c1"", 0.1) AS ""Alias"" FROM ""table""", Compilers.CompileFor(EngineCodes.Snowflake, query.Clone()).ToString());
         }
     }
 }
