@@ -2,17 +2,18 @@ namespace SqlKata.Compilers
 {
     public class SqlServerCompiler : Compiler
     {
+        public override string OpeningIdentifier => "[";
+        public override string ClosingIdentifier => "]";
+        public override string LastId => "SELECT scope_identity() as Id";
+
         public SqlServerCompiler()
         {
-            OpeningIdentifier = "[";
-            ClosingIdentifier = "]";
-            LastId = "SELECT scope_identity() as Id";
         }
 
         public override string EngineCode { get; } = EngineCodes.SqlServer;
         public bool UseLegacyPagination { get; set; } = true;
 
-        protected override SqlResult CompileSelectQuery(Query query)
+        public /* friend */ override SqlResult CompileSelectQuery(Query query)
         {
             if (!UseLegacyPagination || !query.HasOffset(EngineCode))
             {
@@ -21,7 +22,7 @@ namespace SqlKata.Compilers
 
             query = query.Clone();
 
-            var ctx = new SqlResult
+            var ctx = new SqlResult(this)
             {
                 Query = query,
             };

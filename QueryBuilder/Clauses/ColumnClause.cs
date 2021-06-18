@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 
@@ -5,7 +6,21 @@ namespace SqlKata
 {
     public abstract class AbstractColumn : AbstractClause
     {
+        public AbstractColumn() { }
+
+        public AbstractColumn(AbstractColumn other)
+            : base(other)
+        {
+            Alias = other.Alias;
+        }
+
         public string Alias { get; set; }
+
+        /// <summary>
+        /// This is the first introduced Compile() on columns, only
+        /// AggregateColumn implements this at this time.
+        /// </summary>
+        public abstract string Compile(SqlResult ctx);
     }
 
     /// <summary>
@@ -22,16 +37,29 @@ namespace SqlKata
         /// </value>
         public string Name { get; set; }
 
+        public Column() { }
+
+        public Column(Column other)
+            : base(other)
+        {
+            Name = other.Name;
+        }
+
         /// <inheritdoc />
         public override AbstractClause Clone()
         {
-            return new Column
+            return new Column(this);
+        }
+
+        public override string Compile(SqlResult ctx)
+        {
+            if (!string.IsNullOrWhiteSpace(Alias))
             {
-                Engine = Engine,
-                Name = Name,
-                Component = Component,
-                Alias = Alias,
-            };
+                return $"{ctx.Compiler.Wrap(Name)} {ctx.Compiler.ColumnAsKeyword}{ctx.Compiler.Wrap(Alias)}";
+
+            }
+
+            return ctx.Compiler.Wrap(Name);
         }
     }
 
@@ -48,15 +76,35 @@ namespace SqlKata
         /// The query for column value calculation.
         /// </value>
         public Query Query { get; set; }
+
+        public QueryColumn() { }
+
+        public QueryColumn(QueryColumn other)
+            : base(other)
+        {
+            Query = other.Query.Clone();
+        }
+
+        /// <inheritdoc />
         public override AbstractClause Clone()
         {
-            return new QueryColumn
+            return new QueryColumn(this);
+        }
+
+        public override string Compile(SqlResult ctx)
+        {
+            var alias = "";
+
+            if (!string.IsNullOrWhiteSpace(Query.QueryAlias))
             {
-                Engine = Engine,
-                Query = Query.Clone(),
-                Component = Component,
-                Alias = Alias,
-            };
+                alias = $" {ctx.Compiler.ColumnAsKeyword}{ctx.Compiler.WrapValue(Query.QueryAlias)}";
+            }
+
+            var subCtx = ctx.Compiler.CompileSelectQuery(Query);
+
+            ctx.Bindings.AddRange(subCtx.Bindings);
+
+            return "(" + subCtx.RawSql + $"){alias}";
         }
     }
 
@@ -71,17 +119,25 @@ namespace SqlKata
         };
         public AggregateDistinct Distinct { get; set; }
         public bool IsDistinct { get { return this.Distinct == AggregateDistinct.aggregateDistinct; } }
+
+        public AggregateColumn() { }
+
+        public AggregateColumn(AggregateColumn other)
+            : base(other)
+        {
+            Type = other.Type;
+            Column = other.Column;
+            Distinct = other.Distinct;
+        }
+
         public override AbstractClause Clone()
         {
-            return new AggregateColumn
-            {
-                Engine = Engine,
-                Component = Component,
-                Alias = Alias,
-                Type = Type,
-                Column = Column,
-                Distinct = Distinct,
-            };
+            return new AggregateColumn(this);
+        }
+
+        public override string Compile(SqlResult ctx)
+        {
+            return $"{Type.ToUpperInvariant()}({(IsDistinct ? ctx.Compiler.DistinctKeyword : "")}{new Column { Name = Column }.Compile(ctx)}) {ctx.Compiler.ColumnAsKeyword}{ctx.Compiler.WrapValue(Alias ?? Type)}";
         }
     }
 
@@ -96,17 +152,26 @@ namespace SqlKata
         public string Expression { get; set; }
         public object[] Bindings { set; get; }
 
+        public RawColumn() { }
+
+        public RawColumn(RawColumn other)
+            : base(other)
+        {
+            Expression = other.Expression;
+            Bindings = other.Bindings;
+        }
+
         /// <inheritdoc />
         public override AbstractClause Clone()
         {
             Debug.Assert(string.IsNullOrEmpty(Alias), "Raw columns cannot have an alias");
-            return new RawColumn
-            {
-                Engine = Engine,
-                Expression = Expression,
-                Bindings = Bindings,
-                Component = Component,
-            };
+            return new RawColumn(this);
+        }
+
+        public override string Compile(SqlResult ctx)
+        {
+            ctx.Bindings.AddRange(Bindings);
+            return ctx.Compiler.WrapIdentifiers(Expression);
         }
     }
 }
